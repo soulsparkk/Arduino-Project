@@ -1,11 +1,11 @@
 // включаем функцию для логарифмического формата
-#define LOG_OUT           1
+
+#define LIN_OUT           1
 // задаем количество выходных отсчетов
 #define FFT_N             256
 // подключаем библиотеку FFT — быстрое преобразование Фурье
 #include <FFT.h>
 // подключаем библиотеку для работы с дисплеем
-//#include <Adafruit_GFX.h>
 #include <Adafruit_PCD8544.h>
 Adafruit_PCD8544 display = Adafruit_PCD8544(9, 10, 11, 12, 13);
 //библиотека для сохранения настроек
@@ -13,7 +13,6 @@ Adafruit_PCD8544 display = Adafruit_PCD8544(9, 10, 11, 12, 13);
 // номер пина датчика микрофона
 #define MIC_PIN           A2
 //Нижнее и верхнее значение частоты
-#define FREQ_LOW_LEVEL 10
 #define FREQ_HIGH_LEVEL 100
 //пины джойстика
 #define ANALOG_X_pin 0
@@ -23,7 +22,6 @@ Adafruit_PCD8544 display = Adafruit_PCD8544(9, 10, 11, 12, 13);
 #define UP_pin 2
 #define DOWN_pin 4
 #define BUTTON_E 6
-#define BUTTON_F 7
 #define BUTTON_G 8
 
 class Equalizer{
@@ -34,10 +32,8 @@ class Equalizer{
     //Выбранные в данный момент параметры в меню
     uint8_t selectedOption = 0;
     uint8_t menuArea = 0;
-    //cмещение частот
-    byte freq_offset[32] = { 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34};
   public:
-    uint8_t contrast = 70;//Настройка контраста
+    uint8_t contrast = 20;//Настройка контраста
     void ShowMenu(){//главное меню
       while(true){
         //перемещение по главному меню
@@ -96,7 +92,7 @@ class Equalizer{
         // считываем заданное количество отсчётов
         for (int i = 0 ; i < FFT_N; i++) {
           // считываем показания
-          int sample = analogRead(MIC_PIN);
+          int sample = analogRead(MIC_PIN)-511;
           // сохраняем действительные значения в четные отсчеты
           fft_input[i] = sample;
         }
@@ -106,12 +102,21 @@ class Equalizer{
         fft_reorder();
         // обрабатываем данные в FFT
         fft_run();
-        // извлекаем данные, обработанные FFT
-        fft_mag_log();
+        // извлекаем данные, обработанные FFT 
+        fft_mag_lin();
         for (int i = 0; i < columns; i++) {
-          int val = map(fft_log_out[freq_offset[i]], FREQ_LOW_LEVEL, FREQ_HIGH_LEVEL, 47, 0);//переворачиваем диапазон
-          val = constrain(val, 0, 47);//обрезаем все что меньше 0 и больше 47
-          PrintSpectrum(i,val);//вывод значений, i - от низких к высоким, val - размер волны
+          //выкидываем самые низкие частоты
+          short low_freq_range = FFT_N/(2*columns);
+          //пересчитываем диапазоны
+          short range = (FFT_N-low_freq_range)/(2*columns);
+          //ищем максимальную амплитуду в диапазоне
+          short x = fft_lin_out[low_freq_range + i*range];
+          for (int j=i*range;j<(i+1)*range;++j)
+            x = max(x,fft_lin_out[low_freq_range + j]);
+          //мапим на максимальную высоту отображаемого столбца
+          x = map(x, 0, FREQ_HIGH_LEVEL, 0, 47);
+          //вывод значений, i - от низких к высоким, val - амплитуда
+          PrintSpectrum(i,x);
         }
       }
       //возврат к меню
@@ -211,16 +216,13 @@ void setup() {
   pinMode(RIGHT_pin, INPUT_PULLUP);
   pinMode(LEFT_pin, INPUT_PULLUP);
   pinMode(BUTTON_E, INPUT_PULLUP);
-  pinMode(BUTTON_F, INPUT_PULLUP);
   pinMode(BUTTON_G, INPUT_PULLUP);
 //NOKIA 5110
   pinMode(7, OUTPUT);
   digitalWrite(7, LOW);     
   display.begin();
   display.clearDisplay();
-  if (EEPROM.read(0) >= 0 && EEPROM.read(0) <= 124){
-    display.setContrast(EEPROM.get(0,equalizer.contrast));
-  }
+  display.setContrast(60);
   equalizer.SetValues();
   equalizer.ShowMenu();
 }
