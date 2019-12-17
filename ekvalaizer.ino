@@ -5,55 +5,226 @@
 // подключаем библиотеку FFT — быстрое преобразование Фурье
 #include <FFT.h>
 // подключаем библиотеку для работы с дисплеем
-#include <SPI.h>
-#include <Adafruit_GFX.h>
+//#include <Adafruit_GFX.h>
 #include <Adafruit_PCD8544.h>
+Adafruit_PCD8544 display = Adafruit_PCD8544(9, 10, 11, 12, 13);
+//библиотека для сохранения настроек
+#include <EEPROM.h>
 // номер пина датчика микрофона
 #define MIC_PIN           A2
-#define FREQ_LOW_LEVEL 30
+//Нижнее и верхнее значение частоты
+#define FREQ_LOW_LEVEL 10
+#define FREQ_HIGH_LEVEL 100
+//пины джойстика
+#define ANALOG_X_pin 0
+#define ANALOG_Y_pin 1
+#define RIGHT_pin 3
+#define LEFT_pin 5
+#define UP_pin 2
+#define DOWN_pin 4
+#define BUTTON_E 6
+#define BUTTON_F 7
+#define BUTTON_G 8
 
-byte freq_offset[20] = {4, 6, 8, 10, 12, 14, 16, 18, 20, 22};
-
-Adafruit_PCD8544 display = Adafruit_PCD8544(9, 10, 11, 12, 13);
-
-void print(int j,int val){
-      //display.clearDisplay();
-      display.fillRect(8*j, 47, 5, -47, 0);
+class Equalizer{
+  private://переменные
+    //Настройки: число столбцов, скорость
+    int columns = 8;
+    int curDelay = 0;
+    //Выбранные в данный момент параметры в меню
+    uint8_t selectedOption = 0;
+    uint8_t menuArea = 0;
+    //cмещение частот
+    byte freq_offset[32] = { 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34};
+  public:
+    uint8_t contrast = 70;//Настройка контраста
+    void ShowMenu(){//главное меню
+      while(true){
+        //перемещение по главному меню
+        if(menuArea==2){//перемещение по меню настроек
+          if(digitalRead(UP_pin)==LOW){
+            if(selectedOption == 0){
+              selectedOption = 2;
+            }else selectedOption -= 1;
+          }
+          if(digitalRead(DOWN_pin)==LOW){
+            if(selectedOption == 2){
+              selectedOption = 0;
+            }else selectedOption += 1;
+          }
+        }else{//перемещение по главному меню
+          if(digitalRead(UP_pin)==LOW||digitalRead(DOWN_pin)==LOW){
+            if(selectedOption==0){
+              selectedOption=1;
+            }else selectedOption=0;
+          }
+        }
+        display.clearDisplay();
+        if(menuArea==0){//main menu
+          // text for menu
+          display.setTextSize(1);
+          display.setTextColor(BLACK);
+          display.setCursor(25,10);
+          display.println("START!");
+          display.setCursor(18,30);
+          display.println("SETTINGS");
+          display.drawLine(18, 17+(selectedOption*20), display.width()-18,  17+(selectedOption*20), BLACK);//x_start,y_start,x_end,y_end,color
+          display.display();
+          if(digitalRead(BUTTON_G)==LOW){//после нажатия на джойстик
+            display.clearDisplay();
+            if(selectedOption==0){//перейти к эквалайзеру
+              menuArea=1;
+              ShowSpectrum();
+            }else{//перейти к настройкам
+              menuArea=2;
+              selectedOption=0;
+              ShowSettings();
+            }
+          }
+        }else if(menuArea==1){//если находимся в эквалайзере
+          display.clearDisplay();
+          ShowSpectrum();
+        }else if(menuArea==2){//если находимся в настройках
+          display.clearDisplay();
+          ShowSettings();
+        }
+      }
+    }
+    //показать спектр частот
+    void ShowSpectrum(){
+      while(digitalRead(BUTTON_E)!=LOW){//Е выводит из эквалайзера
+        // считываем заданное количество отсчётов
+        for (int i = 0 ; i < FFT_N; i++) {
+          // считываем показания
+          int sample = analogRead(MIC_PIN);
+          // сохраняем действительные значения в четные отсчеты
+          fft_input[i] = sample;
+        }
+        // функция-окно, повышающая частотное разрешение
+        fft_window();
+        // реорганизовываем данные перед запуском FFT
+        fft_reorder();
+        // обрабатываем данные в FFT
+        fft_run();
+        // извлекаем данные, обработанные FFT
+        fft_mag_log();
+        for (int i = 0; i < columns; i++) {
+          int val = map(fft_log_out[freq_offset[i]], FREQ_LOW_LEVEL, FREQ_HIGH_LEVEL, 47, 0);//переворачиваем диапазон
+          val = constrain(val, 0, 47);//обрезаем все что меньше 0 и больше 47
+          PrintSpectrum(i,val);//вывод значений, i - от низких к высоким, val - размер волны
+        }
+      }
+      //возврат к меню
+      menuArea=0;
+      selectedOption=0;
+      ShowMenu();
+    }
+    void PrintSpectrum(int i, int val){
+      //расчет пр-ва между столбцами
+      int modulo=(84-columns*4)%(columns+1);//остаток от деления 
+      int space =(84-columns*4-modulo)/(columns+1);//пр-во между столбцами
+      display.fillRect(space+(space+4)*i, 47, 4, -47, 0);//удаление столбца
       display.display();
-      display.fillRect(8*j, 47, 5, -val, 1);
+      display.fillRect(space+(space+4)*i, 47, 4, -val, 1);//заполнение столбца
       display.display();
-      //delay(10); 
-}
+      delay(curDelay);
+    }
+    void ShowSettings(){//настройки
+      display.setTextSize(1);
+      display.setTextColor(BLACK);
+      display.setCursor(0,5);
+      display.print("Contrast: ");
+      display.println(contrast);
+      display.print("Delay: ");
+      display.println(curDelay);
+      display.print("Columns: ");
+      display.println(columns);
+      //полоса под выбранным
+      display.drawLine(0, 12+(selectedOption*8), display.width()-38,  12+(selectedOption*8), BLACK);//x_start,y_start,x_end,y_end,color 
+      display.display();
+      if(digitalRead(RIGHT_pin)==LOW||digitalRead(LEFT_pin)==LOW){//при изменении чего-то
+        if(selectedOption==0){
+          if(digitalRead(RIGHT_pin)==LOW){//увеличить контраст
+            if(contrast<=124){
+              contrast+=2;
+            }
+            display.setContrast(contrast);
+          }else if(digitalRead(LEFT_pin)==LOW){//уменьшить контраст
+            if(contrast>=0){
+              contrast-=2;
+            }
+            display.setContrast(contrast);
+          }
+          EEPROM.put(0, contrast);//сохранить в памяти устройства
+        }else if(selectedOption==1){
+          if(digitalRead(RIGHT_pin)==LOW){//увеличить задержку
+            if(curDelay<=50){
+              curDelay+=5;
+            }
+          }else if(digitalRead(LEFT_pin)==LOW){//уменьшить задержку
+            if(curDelay>=5){
+              curDelay-=5;
+            }
+          }
+          EEPROM.put(9, curDelay);
+        }else if(selectedOption==2){
+          if(digitalRead(RIGHT_pin)==LOW){//увеличить число столбцов
+            if(columns<=15){
+              columns+=1;
+            }
+          }else if(digitalRead(LEFT_pin)==LOW){//уменьшить число столбцов
+            if(columns>=5){
+              columns-=1;
+            }
+          }
+          EEPROM.put(18, columns);
+        
+        }      
+      }
+      if(digitalRead(BUTTON_E)==LOW){//назад в меню
+        menuArea=0;
+        selectedOption=0;
+        ShowMenu();
+      }
+    }
+    void SetValues(){//вывод настроек из памяти
+      contrast=70;
+      curDelay=0;
+      columns=8;
+      if (EEPROM.read(0) >= 0 && EEPROM.read(0) <= 124)
+        EEPROM.get(0,contrast);
+      if (EEPROM.read(9) >= 0 && EEPROM.read(9) <= 50)
+        EEPROM.get(9,curDelay);
+      if (EEPROM.read(18) >= 3 && EEPROM.read(18) <= 16)
+        EEPROM.get(18,columns);
+    }
+};
+
+
+//Обьявление класса
+Equalizer equalizer;
+
 void setup() {
-  // put your setup code here, to run once:
+  //joystick
+  pinMode(UP_pin, INPUT_PULLUP);
+  pinMode(DOWN_pin, INPUT_PULLUP);
+  pinMode(RIGHT_pin, INPUT_PULLUP);
+  pinMode(LEFT_pin, INPUT_PULLUP);
+  pinMode(BUTTON_E, INPUT_PULLUP);
+  pinMode(BUTTON_F, INPUT_PULLUP);
+  pinMode(BUTTON_G, INPUT_PULLUP);
+//NOKIA 5110
   pinMode(7, OUTPUT);
-  digitalWrite(7, LOW);
-  Serial.begin(9600);         
+  digitalWrite(7, LOW);     
   display.begin();
-  display.setContrast(500);
   display.clearDisplay();
+  if (EEPROM.read(0) >= 0 && EEPROM.read(0) <= 124){
+    display.setContrast(EEPROM.get(0,equalizer.contrast));
+  }
+  equalizer.SetValues();
+  equalizer.ShowMenu();
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  // считываем заданное количество отсчётов
-  for (int i = 0 ; i < FFT_N; i++) {
-    // считываем показания
-    int sample = analogRead(MIC_PIN);
-    // сохраняем действительные значения в четные отсчеты
-    fft_input[i] = sample;
-  }
-  // функция-окно, повышающая частотное разрешение
-  fft_window();
-  // реорганизовываем данные перед запуском FFT
-  fft_reorder();
-  // обрабатываем данные в FFT
-  fft_run();
-  // извлекаем данные, обработанные FFT
-  fft_mag_log();
-  for (int i = 0; i < 10; i++) {
-    int val = map(fft_log_out[freq_offset[i]], FREQ_LOW_LEVEL, 80, 47, 0);//переворачиваем диапазон
-    val = constrain(val, 0, 47);
-    print(i,val);
-  }
+  equalizer.ShowMenu();
 }
